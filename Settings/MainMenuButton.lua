@@ -117,12 +117,79 @@ end
 
 local function PositionUltraButton()
   SkinUltraButton()
+  -- Parent to GameMenuFrame to avoid scale mismatches between UIParent and the menu frame (TBC issue).
+  button:SetParent(GameMenuFrame)
   button:ClearAllPoints()
-  -- Anchor just below the GameMenuFrame (outside of it) for Classic + TBC compatibility
-  button:SetPoint('TOP', GameMenuFrame, 'BOTTOM', 0, -8)
+  -- Insert between the last default button and "Return to Game" for consistent layout.
+  local anchorAbove =
+    _G.GameMenuButtonQuit or _G.GameMenuButtonExitGame or _G.GameMenuButtonLogout
+      or _G.GameMenuButtonMacros or _G.GameMenuButtonContinue
+  if anchorAbove then
+    button:SetPoint('TOP', anchorAbove, 'BOTTOM', 0, -6)
+  else
+    button:SetPoint('BOTTOM', GameMenuFrame, 'BOTTOM', 0, 16)
+  end
   -- Make sure we're above normal UI so it doesn't tuck behind panels
   button:SetFrameStrata(GameMenuFrame:GetFrameStrata() or 'DIALOG')
-  button:SetFrameLevel((GameMenuFrame:GetFrameLevel() or 0) + 10)
+  if _G.GameMenuButtonContinue then
+    button:SetFrameLevel(GameMenuButtonContinue:GetFrameLevel())
+  else
+    button:SetFrameLevel((GameMenuFrame:GetFrameLevel() or 0) + 1)
+  end
+
+  -- Extend the GameMenuFrame so the button fits inside the box.
+  local extraHeight = button:GetHeight() + 8
+  local currentHeight = GameMenuFrame:GetHeight()
+  if not GameMenuFrame._uhcBaseHeight then
+    GameMenuFrame._uhcBaseHeight = currentHeight
+  end
+  -- If Blizzard reset the height after we adjusted, refresh the base height.
+  if
+    not GameMenuFrame._uhcHeightAdjusted
+    and math.abs(currentHeight - (GameMenuFrame._uhcBaseHeight + extraHeight)) > 1
+  then
+    GameMenuFrame._uhcBaseHeight = currentHeight
+  end
+  GameMenuFrame._uhcHeightAdjusted = true
+  GameMenuFrame:SetHeight(GameMenuFrame._uhcBaseHeight + extraHeight)
+
+  -- Re-anchor "Return to Game" below our button so it doesn't overlap.
+  if _G.GameMenuButtonContinue then
+    GameMenuButtonContinue:ClearAllPoints()
+    GameMenuButtonContinue:SetPoint('TOP', button, 'BOTTOM', 0, -6)
+  end
+end
+
+local function ScheduleReposition()
+  -- TBC can reshuffle buttons over the next few frames after opening.
+  if C_Timer and C_Timer.NewTicker then
+    if GameMenuFrame._uhcRepositionTicker then
+      GameMenuFrame._uhcRepositionTicker:Cancel()
+    end
+    local ticks = 0
+    GameMenuFrame._uhcRepositionTicker = C_Timer.NewTicker(0, function()
+      if not GameMenuFrame:IsShown() then
+        return
+      end
+      PositionUltraButton()
+      button:Show()
+      ticks = ticks + 1
+      if ticks >= 5 and GameMenuFrame._uhcRepositionTicker then
+        GameMenuFrame._uhcRepositionTicker:Cancel()
+        GameMenuFrame._uhcRepositionTicker = nil
+      end
+    end)
+  elseif C_Timer and C_Timer.After then
+    C_Timer.After(0, function()
+      if GameMenuFrame:IsShown() then
+        PositionUltraButton()
+        button:Show()
+      end
+    end)
+  else
+    PositionUltraButton()
+    button:Show()
+  end
 end
 
 -- Set the click handler
@@ -135,10 +202,20 @@ end)
 
 -- Show/hide alongside the GameMenuFrame without modifying Blizzard's internal layout
 GameMenuFrame:HookScript('OnShow', function()
-  PositionUltraButton()
-  button:Show()
+  -- Delay and retry to allow Blizzard's layout to finish in TBC, then reposition.
+  ScheduleReposition()
 end)
 
 GameMenuFrame:HookScript('OnHide', function()
   button:Hide()
+  GameMenuFrame._uhcHeightAdjusted = false
 end)
+
+-- Re-apply after Blizzard updates button layout (TBC reorders on update).
+if hooksecurefunc and _G.GameMenuFrame_UpdateVisibleButtons then
+  hooksecurefunc('GameMenuFrame_UpdateVisibleButtons', function()
+    if GameMenuFrame:IsShown() then
+      ScheduleReposition()
+    end
+  end)
+end
